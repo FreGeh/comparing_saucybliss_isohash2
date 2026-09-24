@@ -1,0 +1,23 @@
+\documentclass[border=2pt]{standalone}
+\usepackage{amsmath,amssymb}
+\usepackage[ruled,vlined,linesnumbered,commentsnumbered]{algorithm2e}
+\begin{document}
+\begin{minipage}{15cm}
+\begin{algorithm}[H]
+\DontPrintSemicolon
+\caption{IsoHash2 (simplified)}
+\KwIn{CNF formula $F$; maximum rounds $t_{\max}=31$}
+\KwOut{Instance hash}
+$K_0(l)\leftarrow 1$ for every literal $l$ in $F$; $D_{\mathrm{prev}}\leftarrow 0$\;
+\For{$t=0,\ldots,t_{\max}-1$}{
+ $X_C\leftarrow\mathsf{mix}($literal colors $K_t(l)$ in $C)$ for each clause $C\in F$\;
+ $A[l]\leftarrow$ sum of clause colors $X_C$ incident to each literal $l$\;
+ $K_{t+1}(l)\leftarrow\mathsf{combine}(A[l],K_t(l),K_t(\overline l))$ for each $l$\;
+ $D\leftarrow$ number of distinct literal colors $K_{t+1}(l)$\;
+ \lIf{$D=D_{\mathrm{prev}}$}{\textbf{break}}
+ $D_{\mathrm{prev}}\leftarrow D$\;
+}
+\Return $\mathsf{hash}(\mathsf{sort}($canonical variable-color pairs from the last round$))$\;
+\end{algorithm}
+\end{minipage}
+\end{document}

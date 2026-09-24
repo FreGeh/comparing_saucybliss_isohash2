@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<style xmlns="http://purl.org/net/xbiblio/csl" version="1.0" class="in-text" default-locale="en-US">
+  <info>
+    <title>IsoHash comparison — compact numeric</title>
+    <id>https://example.org/styles/isohash-compact</id>
+    <link href="https://example.org/styles/isohash-compact" rel="self"/>
+    <author><name>Frederick Gehm</name></author>
+    <category citation-format="numeric"/>
+    <updated>2026-09-23T00:00:00+00:00</updated>
+  </info>
+  <macro name="author">
+    <names variable="author">
+      <name and="text" delimiter=", " delimiter-precedes-last="contextual"/>
+      <substitute><text variable="title"/></substitute>
+    </names>
+  </macro>
+  <citation collapse="citation-number">
+    <sort><key variable="citation-number"/></sort>
+    <layout prefix="[" suffix="]" delimiter="; ">
+      <text variable="citation-number"/>
+      <group prefix=", " delimiter=" ">
+        <label variable="locator" form="short"/>
+        <text variable="locator"/>
+      </group>
+    </layout>
+  </citation>
+  <bibliography entry-spacing="1" second-field-align="flush">
+    <layout>
+      <text variable="citation-number" prefix="[" suffix="]"/>
+      <group delimiter=". " suffix=".">
+        <text macro="author"/>
+        <text variable="title"/>
+        <group delimiter=", ">
+          <text variable="container-title" font-style="italic"/>
+          <date variable="issued"><date-part name="year"/></date>
+        </group>
+        <choose>
+          <if variable="DOI"><text variable="DOI" prefix="https://doi.org/"/></if>
+          <else><text variable="URL"/></else>
+        </choose>
+      </group>
+    </layout>
+  </bibliography>
+</style>

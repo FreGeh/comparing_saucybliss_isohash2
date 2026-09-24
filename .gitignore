@@ -1,0 +1,21 @@
+.venv/
+.quarto/
+_site/
+__pycache__/
+.ipynb_checkpoints/
+
+/.quarto/
+
+**/*.quarto_ipynb
+
+
+# Local reference material; not part of the report
+/references/*.pdf
+/plots.ipynb
+/split_investigation/
+/nextsteps.md
+
+# Generated notebook previews and libraries
+/site_libs/
+/index.out.ipynb
+/index-preview.html

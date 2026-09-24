@@ -1,0 +1,24 @@
+\documentclass[border=2pt]{standalone}
+\usepackage{amsmath,amssymb}
+\usepackage[ruled,vlined,linesnumbered,commentsnumbered]{algorithm2e}
+\begin{document}
+\begin{minipage}{15cm}
+\begin{algorithm}[H]
+\DontPrintSemicolon
+\setcounter{algocf}{1}
+\caption{Saucy/Bliss (simplified)}
+\KwIn{CNF formula $F$}
+\KwOut{Instance hash}
+\textbf{cnf2sig:} encode $F$ as a colored graph $G$\;
+\textbf{Bliss:} choose a sequence of vertices to fix; pause the search\;
+\textbf{Saucy:} find symmetries of $G$ following that fixing sequence\;
+\Indp
+Group interchangeable vertices at each level (stabilizer orbits)\;
+Pass these orbit partitions back to Bliss\;
+\Indm
+\textbf{Bliss:} resume, skipping branches equivalent under those symmetries\;
+$R\leftarrow$ canonical representation selected by Bliss\;
+\Return $\mathsf{hash}(R)$\;
+\end{algorithm}
+\end{minipage}
+\end{document}

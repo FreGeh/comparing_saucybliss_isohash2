@@ -1,0 +1,307 @@
+---
+title: "IsoHash2 compared to Saucy/Bliss"
+bibliography: references.bib
+csl: references/compact.csl
+citeproc: true
+link-citations: true
+---
+
+```{python}
+#| include: false
+from pathlib import Path
+from itertools import combinations
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from IPython.display import display, HTML
+
+pd.set_option("display.max_colwidth", None)
+pd.set_option("display.float_format", "{:.3f}".format)
+data_dir = Path("data")
+runs = {"mi31": "IsoHash2 (31)", "unlimited": "IsoHash2 (unlimited)", "sb": "Saucy/Bliss"}
+methods = {m: runs[m] for m in ("mi31", "sb")}
+files = {
+    "mi31": ("isohash2_mi31_results.csv", "isohash2"),
+    "unlimited": ("isohash2_unlimited_results.csv", "isohash2"),
+    "sb": ("saucybliss_results.csv", "saucybliss"),
+}
+missing = {"", "empty", "None"}
+
+def read_table(filename):
+    table = pd.read_csv(data_dir / filename, dtype=str, keep_default_na=False)
+    assert table.hash.str.strip().ne("").all() and table.hash.is_unique, filename
+    return table
+
+raw = read_table("instance_metadata.csv")
+for method, (filename, prefix) in files.items():
+    table = read_table(filename)
+    assert set(table.hash) == set(raw.hash), filename
+    table = table.rename(columns={
+        c: method + c[len(prefix):] if c.startswith(prefix + "_") else method + "_" + c
+        for c in table if c != "hash"
+    })
+    assert not (set(raw.columns) & set(table.columns)) - {"hash"}
+    raw = raw.merge(table, on="hash", validate="one_to_one", sort=False)
+
+df = raw.copy()
+for method in runs:
+    for metric in ("CPUTIME", "WCTIME", "USERTIME", "SYSTEMTIME", "MAXRSS"):
+        values = df[f"{method}_{metric}"].str.strip()
+        df[f"{method}_{metric}"] = pd.to_numeric(values.mask(values.isin(missing)), errors="raise")
+    successful = df[f"{method}_status"].eq("ok")
+    assert not df.loc[successful, f"{method}_hash"].str.strip().isin(missing).any()
+df["family"] = df.family.mask(df.family.str.strip().isin(missing), "(missing)")
+common = df.loc[df[[m + "_status" for m in methods]].eq("ok").all(axis=1)].copy()
+iso_common = df.loc[df.mi31_status.eq("ok") & df.unlimited_status.eq("ok")]
+
+# Use a shared measurement cohort for each comparison.
+def measured(frame, metric):
+    values = frame[[m + "_" + metric for m in methods]]
+    return frame.loc[(np.isfinite(values) & values.gt(0)).all(axis=1)]
+
+def splits(frame, source, target):
+    counts = frame.groupby(source + "_hash")[target + "_hash"].nunique()
+    groups = counts[counts > 1].index
+    return len(groups), frame[source + "_hash"].isin(groups)
+
+def group_summary(frame):
+    rows = []
+    for method, label in methods.items():
+        marked = pd.Series(False, index=frame.index)
+        for other in methods:
+            if other != method:
+                marked |= splits(frame, method, other)[1]
+        rows.append({"Method": label, "Hash groups": frame[method + "_hash"].nunique(),
+                     "Groups split by the other method": frame.loc[marked, method + "_hash"].nunique(),
+                     "Instances in split groups": int(marked.sum())})
+    return pd.DataFrame(rows).set_index("Method")
+
+def performance(frame):
+    cpu, memory = measured(frame, "CPUTIME"), measured(frame, "MAXRSS")
+    return pd.DataFrame({label: {
+        "Total CPU (h)": cpu[m + "_CPUTIME"].sum() / 3600,
+        "Median CPU (s)": cpu[m + "_CPUTIME"].median(),
+        "Median peak memory (MiB)": memory[m + "_MAXRSS"].median() / 1024,
+    } for m, label in methods.items()}).rename_axis("Measure")
+
+three_common = df.loc[df[[m + "_status" for m in runs]].eq("ok").all(axis=1)]
+three_cpu = three_common[[m + "_CPUTIME" for m in runs]]
+three_cpu = three_cpu.loc[(np.isfinite(three_cpu) & three_cpu.gt(0)).all(axis=1)]
+unlimited_cpu_ratio = f"{three_cpu.unlimited_CPUTIME.sum() / three_cpu.mi31_CPUTIME.sum():.2f}"
+unlimited_timeouts = int(df.unlimited_status.eq("timeout").sum())
+n_three_cpu = f"{len(three_cpu):,}"
+n_instances, n_common, n_iso = (f"{len(x):,}" for x in (df, common, iso_common))
+changed_hashes = f"{iso_common.mi31_hash.ne(iso_common.unlimited_hash).sum():,}"
+iso_forward = splits(iso_common, "mi31", "unlimited")[0]
+iso_reverse = splits(iso_common, "unlimited", "mi31")[0]
+assert iso_forward == iso_reverse == 0, "IsoHash2 partitions differ: report both variants separately."
+
+cpu, memory = measured(common, "CPUTIME"), measured(common, "MAXRSS")
+n_cpu, n_memory = f"{len(cpu):,}", f"{len(memory):,}"
+# Match the final comparison figure in plots.ipynb.
+plt.style.use("seaborn-v0_8-paper")
+PAPER_STYLE = {
+    "font.family": "sans-serif",
+    "font.weight": "normal",
+    "font.size": 10,
+    "axes.titlesize": 10,
+    "axes.labelsize": 10,
+    "xtick.labelsize": 9,
+    "ytick.labelsize": 9,
+    "legend.fontsize": 8.5,
+    "lines.linewidth": 1.2,
+    "figure.dpi": 300,
+    "axes.edgecolor": "black",
+    "axes.linewidth": 0.8,
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+    "path.simplify": True,
+    "pdf.compression": 0,
+    "pdf.fonttype": 42,
+    "svg.fonttype": "none",
+    "savefig.bbox": "tight",
+}
+plt.rcParams.update(PAPER_STYLE)
+blue, red = plt.get_cmap("coolwarm")(.05), plt.get_cmap("coolwarm")(.95)
+```
+
+<details>
+<summary>Algorithms</summary>
+
+![](assets/algorithms/isohash2.svg){.algorithm fig-alt="IsoHash2: refine clause and literal colors until the number of literal colors stops changing or 31 rounds are reached; hash the sorted variable-color pairs."}
+
+![](assets/algorithms/saucybliss.svg){.algorithm fig-alt="Saucy/Bliss: encode the formula as a graph, use Saucy's symmetries to prune Bliss's canonicalization search, and hash the canonical graph."}
+
+</details>
+
+## Setup
+
+`{python} n_instances` CNF instances from the [Global Benchmark Database](https://benchmark-database.de/).
+
+IsoHash2 refines clause and literal colors [@iser2026].
+
+Saucy/Bliss canonicalizes a graph encoding of the formula [@katebi2012].
+
+| Run | Stopping limit |
+|---|---|
+| IsoHash2 (31) | 31 max rounds; 1-hour CPU limit |
+| Saucy/Bliss | 1-hour CPU limit; timeouts retried with a 12-hour CPU limit |
+
+<details>
+<summary>IsoHash2 without round limit</summary>
+
+> If we set round limit to $0$, IsoHash2 runs each instance until stabilization.
+> 
+> Accuracy is the same with `{python} n_iso` shared IsoHash2 successes, although `{python} changed_hashes` fingerprints change. 
+>
+> It has `{python} unlimited_timeouts` timeouts and uses `{python} unlimited_cpu_ratio`× the CPU of the 31-round run on `{python} n_three_cpu` three-way common successes.
+>
+> That's why we use the 31-round run below.
+
+</details>
+
+All runs use Liskov (128 physical cores, 2 TB RAM), with 64 workers per method.
+
+Timings include input parsing and, for Saucy/Bliss, graph construction via [`cnf2sig`](https://github.com/FreGeh/gbdc_f/blob/cnf2sig/src/transform/cnf2sig.cc).
+
+```{python}
+#| label: tbl-coverage
+#| tbl-cap: Outcomes on the full dataset.
+pd.DataFrame({label: df[m + "_status"].value_counts() for m, label in methods.items()}).fillna(0).astype(int).rename_axis("Status")
+```
+
+Comparisons below use the `{python} n_common` instances completed by both methods.
+
+## Hash groups
+
+
+```{python}
+#| label: tbl-partitions
+#| tbl-cap: Groups on common successes.
+group_summary(common)
+```
+
+A split means another run assigns different hashes within a group.
+This measures grouping differences, not a verified error rate.
+
+<details>
+<summary>Example where Saucy/Bliss separates</summary>
+
+> The Tseitin instances `bevhcube3.shuffled-as.sat03-1425` and `urquhart2_25bis.shuffled` each have 36 variables and 96 three-literal clauses.
+> Each variable occurs four times positively and four times negatively.
+> Both IsoHash2 runs give the pair the same fingerprint; Saucy/Bliss returns different canonical graph outputs ([results](data/split_example.csv)).
+> Exact refinement matching IsoHash2 also leaves all literals in one color class: removing hash collisions does not separate this pair.
+
+</details>
+
+## CPU time and memory
+
+```{python}
+#| label: tbl-performance
+#| tbl-cap: Resources on common successes.
+performance(common)
+```
+
+CPU totals are summed processing time, not elapsed time. Only positive, finite
+measurements are used: `{python} n_cpu` instances for CPU and `{python} n_memory` for memory.
+
+```{python}
+#| label: fig-cost
+#| fig-cap: "CPU time on common successes. Dashed line: equal time. Red: instances in split groups."
+#| fig-width: 5
+#| fig-height: 4.6
+#| fig-dpi: 300
+
+def plot_cpu_comparison(frame):
+    x, y = frame.mi31_CPUTIME, frame.sb_CPUTIME
+    marked = splits(frame, "mi31", "sb")[1] | splits(frame, "sb", "mi31")[1]
+    limits = [min(x.min(), y.min()) * .7, max(x.max(), y.max()) * 1.5]
+    fig, ax = plt.subplots(figsize=(5, 4.6), constrained_layout=True)
+
+    for mask, color in ((~marked, blue), (marked, red)):
+        ax.scatter(x[mask], y[mask], color=color, s=8, alpha=.55,
+                   edgecolors="none", rasterized=True, zorder=2)
+    ax.plot(limits, limits, color="black", linestyle="--",
+            linewidth=1.1, alpha=.85, zorder=3)
+
+    ax.set(xscale="log", yscale="log", xlim=limits, ylim=limits,
+           xlabel="IsoHash2 (31) CPU Time [s]", ylabel="Saucy/Bliss CPU Time [s]")
+    ax.set_aspect("equal")
+    ax.set_axisbelow(True)
+    ax.minorticks_off()
+    ax.grid(True, which="major", color="0.86", linestyle="-", linewidth=.6)
+    ax.grid(False, which="minor")
+    ax.tick_params(which="major", length=3.5, width=.8)
+    return fig, ax
+
+fig, ax = plot_cpu_comparison(cpu)
+plt.show()
+```
+
+```{python}
+ratios = []
+for a, b in combinations(methods, 2):
+    ratios.append({"Ratio": methods[b] + " / " + methods[a],
+                   "Median CPU ratio": (cpu[b + "_CPUTIME"] / cpu[a + "_CPUTIME"]).median(),
+                   "Median memory ratio": (memory[b + "_MAXRSS"] / memory[a + "_MAXRSS"]).median()})
+ratio_table = pd.DataFrame(ratios).set_index("Ratio")
+
+largest = common.family.value_counts().head(10)
+family_rows = []
+for family, count in largest.items():
+    subset = common.loc[common.family.eq(family)]
+    family_cpu, family_memory = measured(subset, "CPUTIME"), measured(subset, "MAXRSS")
+    for method, label in methods.items():
+        family_rows.append({"Family": family, "Run": label, "Instances": int(count),
+                            "Median CPU (s)": family_cpu[method + "_CPUTIME"].median(),
+                            "Median peak memory (MiB)": family_memory[method + "_MAXRSS"].median() / 1024})
+family_table = pd.DataFrame(family_rows).set_index(["Family", "Run"])
+display(HTML('<details><summary>Largest Families analyzed</summary>'
+    + family_table.to_html(float_format="{:.3f}".format) + '</details>'))
+```
+
+## SAT 2011 subset
+
+Since Katebi et al. [@katebi2012, sec. 6] used Application, crafted, and random tracks with more than 10,000 variables, we show them here as well:
+
+```{python}
+#| include: false
+sat_tracks = {"application_2011", "crafted_2011", "random_2011"}
+in_track = df.track.str.split(",").map(lambda ts: bool(sat_tracks.intersection(t.strip() for t in ts)))
+variables = pd.to_numeric(df.variables.mask(df.variables.isin(missing)), errors="raise")
+sat2011 = df.loc[in_track & variables.gt(10000)]
+sat_common = common.loc[common.index.intersection(sat2011.index)]
+sat_count, sat_ok = f"{len(sat2011):,}", f"{len(sat_common):,}"
+sat_groups = group_summary(sat_common)
+sat_note = ("Both methods produce the same groups on these common successes."
+            if sat_groups["Groups split by the other method"].eq(0).all() else
+            "The runs produce different groups on these common successes.")
+```
+
+```{python}
+#| label: tbl-sat2011
+#| tbl-cap: Success counts on the full subset; resources and groups on common successes.
+sat_summary = performance(sat_common)
+sat_summary.loc["Successful runs"] = [int(sat2011[m + "_status"].eq("ok").sum()) for m in methods]
+sat_summary.loc["Hash groups"] = sat_groups["Hash groups"].to_numpy()
+sat_summary.loc["Groups split by the other method"] = sat_groups["Groups split by the other method"].to_numpy()
+sat_summary = sat_summary.loc[["Successful runs", "Total CPU (h)", "Median CPU (s)",
+                               "Median peak memory (MiB)", "Hash groups", "Groups split by the other method"]]
+sat_summary.style.format("{:.3f}").format("{:,.0f}", subset=pd.IndexSlice[["Successful runs", "Hash groups", "Groups split by the other method"], :])
+```
+
+## Data
+
+* [Metadata](data/instance_metadata.csv)
+* [IsoHash2 (31)](data/isohash2_mi31_results.csv)
+* [IsoHash2 (unlimited)](data/isohash2_unlimited_results.csv)
+* [Saucy/Bliss](data/saucybliss_results.csv)
+
+We join all by the GBD instance `hash`.
+
+*Run `quarto render` to reproduce the tables and plots.*
+
+## References
+
+::: {#refs}
+:::

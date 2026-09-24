@@ -1,0 +1,35 @@
+author:
+  name: Frederick Gehm
+  email: frederick.gehm@student.kit.edu
+project:
+  type: manuscript
+  output-dir: _site
+  render: [index.qmd]
+  resources:
+    - data/*.csv
+    - assets/*.js
+    - assets/algorithms/*.tex
+    - assets/algorithms/render.sh
+manuscript:
+  article: index.qmd
+website:
+  title: IsoHash2 compared to Saucy/Bliss
+format:
+  html:
+    theme: default
+    fig-format: svg
+    title-block-banner: false
+    css: assets/site.css
+    toc: true
+    code-fold: true
+    code-summary: Code
+    html-math-method: mathjax
+    link-external-newwindow: true
+    citations-hover: true
+    include-after-body:
+      - text: '<script src="assets/links.js"></script>'
+execute:
+  cache: false
+  freeze: false
+  error: false
+jupyter: python3
