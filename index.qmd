@@ -209,7 +209,6 @@ group_summary(common)
 ```
 
 A split means the other method assigns different hashes within a group.
-This measures grouping differences, not a verified error rate.
 
 <details>
 <summary>Example distinguished only by Saucy/Bliss</summary>
