@@ -18,17 +18,33 @@ from IPython.display import display, HTML
 pd.set_option("display.max_colwidth", None)
 pd.set_option("display.float_format", "{:.3f}".format)
 data_dir = Path("data")
-runs = {"mi31": "IsoHash2 (31)", "unlimited": "IsoHash2 (unlimited)", "sb": "Saucy/Bliss"}
+runs = {"mi31": "IsoHash2 (31 rounds)", "unlimited": "IsoHash2 (until stabilization)", "sb": "Saucy/Bliss"}
 methods = {m: runs[m] for m in ("mi31", "sb")}
 files = {
-    "mi31": ("isohash2_mi31_results.csv", "isohash2"),
+    "mi31": ("isohash2_normalized_mi31.csv", "isohash2"),
     "unlimited": ("isohash2_unlimited_results.csv", "isohash2"),
-    "sb": ("saucybliss_results.csv", "saucybliss"),
+    "sb": ("saucybliss_normalized.csv", "saucybliss"),
 }
 missing = {"", "empty", "None"}
 
 def read_table(filename):
     table = pd.read_csv(data_dir / filename, dtype=str, keep_default_na=False)
+    if filename in {"isohash2_normalized_mi31.csv", "saucybliss_normalized.csv"}:
+        prefix = "isohash2" if filename.startswith("isohash2") else "saucybliss"
+        # metadata_hash identifies the input; hash_md5 is the computed fingerprint.
+        columns = {
+            "metadata_hash": "hash", "id": "iso_id", "hash_md5": "isohash2_hash",
+            "status": "isohash2_status", "return_code": "isohash2_rc",
+            "wall_s": "isohash2_WCTIME", "cpu_s": "isohash2_CPUTIME",
+            "user_s": "isohash2_USERTIME", "system_s": "isohash2_SYSTEMTIME",
+            "max_rss_kib": "isohash2_MAXRSS",
+        }
+        if prefix == "isohash2":
+            assert table.max_iters.eq("31").all() and table.cpu_limit_s.eq("3600").all()
+        else:
+            assert table.cpu_limit_s.eq("43200").all() and table.wall_limit_s.eq("43200").all()
+        columns = {key: value.replace("isohash2", prefix) for key, value in columns.items()}
+        table = table[list(columns)].rename(columns=columns)
     assert table.hash.str.strip().ne("").all() and table.hash.is_unique, filename
     return table
 
@@ -94,7 +110,12 @@ n_instances, n_common, n_iso = (f"{len(x):,}" for x in (df, common, iso_common))
 changed_hashes = f"{iso_common.mi31_hash.ne(iso_common.unlimited_hash).sum():,}"
 iso_forward = splits(iso_common, "mi31", "unlimited")[0]
 iso_reverse = splits(iso_common, "unlimited", "mi31")[0]
-assert iso_forward == iso_reverse == 0, "IsoHash2 partitions differ: report both variants separately."
+iso_partition_note = (
+    "The two runs produce the same groups on their shared successes."
+    if iso_forward == iso_reverse == 0 else
+    f"The earlier run until stabilization splits {iso_forward:,} 31-round groups; "
+    f"the 31-round run splits {iso_reverse:,} groups from the earlier run until stabilization."
+)
 
 cpu, memory = measured(common, "CPUTIME"), measured(common, "MAXRSS")
 n_cpu, n_memory = f"{len(cpu):,}", f"{len(memory):,}"
@@ -128,6 +149,12 @@ blue, red = plt.get_cmap("coolwarm")(.05), plt.get_cmap("coolwarm")(.95)
 <details>
 <summary>Algorithms</summary>
 
+Before passing the CNF to either algorithm, we normalize it:
+
+- Remove repeated literals within each clause.
+- Remove tautological clauses (containing both $x$ and $\neg x$).
+- Renumber the remaining variables consecutively.
+
 ![](assets/algorithms/isohash2.svg){.algorithm fig-alt="IsoHash2: refine clause and literal colors until the number of literal colors stops changing or 31 rounds are reached; hash the sorted variable-color pairs."}
 
 ![](assets/algorithms/saucybliss.svg){.algorithm fig-alt="Saucy/Bliss: encode the formula as a graph, use Saucy's symmetries to prune Bliss's canonicalization search, and hash the canonical graph."}
@@ -142,27 +169,27 @@ IsoHash2 refines clause and literal colors [@iser2026].
 
 Saucy/Bliss canonicalizes a graph encoding of the formula [@katebi2012].
 
-| Run | Stopping limit |
+| Method | Stopping limit |
 |---|---|
-| IsoHash2 (31) | 31 max rounds; 1-hour CPU limit |
-| Saucy/Bliss | 1-hour CPU limit; timeouts retried with a 12-hour CPU limit |
+| IsoHash2 (31 rounds) | At most 31 refinement rounds; 1-hour CPU limit |
+| Saucy/Bliss | 12-hour CPU and wall-time limits |
 
-<details>
-<summary>IsoHash2 without round limit</summary>
+<!-- <details>
+<summary>Earlier IsoHash2 results: refinement until stabilization</summary>
 
-> If we set round limit to $0$, IsoHash2 runs each instance until stabilization.
-> 
-> Accuracy is the same with `{python} n_iso` shared IsoHash2 successes, although `{python} changed_hashes` fingerprints change. 
+> The earlier IsoHash2 run refines colors until stabilization, with no round limit.
+> It predates the current 31-round data, so this is not a controlled comparison of round limits.
 >
-> It has `{python} unlimited_timeouts` timeouts and uses `{python} unlimited_cpu_ratio`× the CPU of the 31-round run on `{python} n_three_cpu` three-way common successes.
+> On `{python} n_iso` shared successes, `{python} changed_hashes` fingerprints differ.
+> `{python} iso_partition_note`
 >
-> That's why we use the 31-round run below.
+> The historical run has `{python} unlimited_timeouts` timeouts and uses `{python} unlimited_cpu_ratio`× the CPU of the 31-round run on `{python} n_three_cpu` three-way common successes.
 
-</details>
+</details> -->
 
 All runs use Liskov (128 physical cores, 2 TB RAM), with 64 workers per method.
 
-Timings include input parsing and, for Saucy/Bliss, graph construction via [`cnf2sig`](https://github.com/FreGeh/gbdc_f/blob/cnf2sig/src/transform/cnf2sig.cc).
+Timings include input parsing and, for Saucy/Bliss, graph construction via [`cnf2lig`](https://github.com/FreGeh/gbdc_f/blob/85166564911ebc20e595be375a2b84d44596b671/src/transform/cnf2lig.cc).
 
 ```{python}
 #| label: tbl-coverage
@@ -177,19 +204,19 @@ Comparisons below use the `{python} n_common` instances completed by both method
 
 ```{python}
 #| label: tbl-partitions
-#| tbl-cap: Groups on common successes.
+#| tbl-cap: Hash groups for instances completed by both methods.
 group_summary(common)
 ```
 
-A split means another run assigns different hashes within a group.
+A split means the other method assigns different hashes within a group.
 This measures grouping differences, not a verified error rate.
 
 <details>
-<summary>Example where Saucy/Bliss separates</summary>
+<summary>Example distinguished only by Saucy/Bliss</summary>
 
 > The Tseitin instances `bevhcube3.shuffled-as.sat03-1425` and `urquhart2_25bis.shuffled` each have 36 variables and 96 three-literal clauses.
 > Each variable occurs four times positively and four times negatively.
-> Both IsoHash2 runs give the pair the same fingerprint; Saucy/Bliss returns different canonical graph outputs ([results](data/split_example.csv)).
+> The historical IsoHash2 runs give the pair the same fingerprint; Saucy/Bliss returns different canonical graph outputs ([historical results](data/split_example.csv)).
 > Exact refinement matching IsoHash2 also leaves all literals in one color class: removing hash collisions does not separate this pair.
 
 </details>
@@ -198,7 +225,7 @@ This measures grouping differences, not a verified error rate.
 
 ```{python}
 #| label: tbl-performance
-#| tbl-cap: Resources on common successes.
+#| tbl-cap: CPU time and memory for instances completed by both methods.
 performance(common)
 ```
 
@@ -207,7 +234,7 @@ measurements are used: `{python} n_cpu` instances for CPU and `{python} n_memory
 
 ```{python}
 #| label: fig-cost
-#| fig-cap: "CPU time on common successes. Dashed line: equal time. Red: instances in split groups."
+#| fig-cap: "CPU time for instances completed by both methods. Dashed line: equal time. Red: instances in split groups."
 #| fig-width: 5
 #| fig-height: 4.6
 #| fig-dpi: 300
@@ -225,7 +252,7 @@ def plot_cpu_comparison(frame):
             linewidth=1.1, alpha=.85, zorder=3)
 
     ax.set(xscale="log", yscale="log", xlim=limits, ylim=limits,
-           xlabel="IsoHash2 (31) CPU Time [s]", ylabel="Saucy/Bliss CPU Time [s]")
+           xlabel="IsoHash2 (31 rounds) CPU Time [s]", ylabel="Saucy/Bliss CPU Time [s]")
     ax.set_aspect("equal")
     ax.set_axisbelow(True)
     ax.minorticks_off()
@@ -252,11 +279,11 @@ for family, count in largest.items():
     subset = common.loc[common.family.eq(family)]
     family_cpu, family_memory = measured(subset, "CPUTIME"), measured(subset, "MAXRSS")
     for method, label in methods.items():
-        family_rows.append({"Family": family, "Run": label, "Instances": int(count),
+        family_rows.append({"Family": family, "Method": label, "Instances": int(count),
                             "Median CPU (s)": family_cpu[method + "_CPUTIME"].median(),
                             "Median peak memory (MiB)": family_memory[method + "_MAXRSS"].median() / 1024})
-family_table = pd.DataFrame(family_rows).set_index(["Family", "Run"])
-display(HTML('<details><summary>Largest Families analyzed</summary>'
+family_table = pd.DataFrame(family_rows).set_index(["Family", "Method"])
+display(HTML('<details><summary>Ten largest benchmark families</summary>'
     + family_table.to_html(float_format="{:.3f}".format) + '</details>'))
 ```
 
@@ -280,7 +307,7 @@ sat_note = ("Both methods produce the same groups on these common successes."
 
 ```{python}
 #| label: tbl-sat2011
-#| tbl-cap: Success counts on the full subset; resources and groups on common successes.
+#| tbl-cap: Completion counts for the full subset; CPU time, memory, and hash groups for instances completed by both methods.
 sat_summary = performance(sat_common)
 sat_summary.loc["Successful runs"] = [int(sat2011[m + "_status"].eq("ok").sum()) for m in methods]
 sat_summary.loc["Hash groups"] = sat_groups["Hash groups"].to_numpy()
@@ -293,11 +320,12 @@ sat_summary.style.format("{:.3f}").format("{:,.0f}", subset=pd.IndexSlice[["Succ
 ## Data
 
 * [Metadata](data/instance_metadata.csv)
-* [IsoHash2 (31)](data/isohash2_mi31_results.csv)
-* [IsoHash2 (unlimited)](data/isohash2_unlimited_results.csv)
-* [Saucy/Bliss](data/saucybliss_results.csv)
+* [IsoHash2 (31 rounds)](data/isohash2_normalized_mi31.csv)
+* [IsoHash2 (until stabilization, historical)](data/isohash2_unlimited_results.csv)
+* [Saucy/Bliss](data/saucybliss_normalized.csv)
 
-We join all by the GBD instance `hash`.
+Datasets are joined by the GBD instance `hash` (`metadata_hash` in the normalized CSVs).
+The normalized CSVs’ `hash_md5` is the computed fingerprint; times are in seconds and peak RSS is in KiB.
 
 *Run `quarto render` to reproduce the tables and plots.*
 
